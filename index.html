@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>阿順和 秦佳圓的記帳</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* 銀髮族友善設定 */
+        body { 
+            -webkit-tap-highlight-color: transparent; 
+            background-color: #f0f2f5; /* 護眼淺灰底 */
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        /* 數字專用字體，清楚好讀 */
+        .font-num { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: 0.5px; }
+        
+        /* 便當風格卡片 */
+        .bento-card {
+            background: white;
+            border-radius: 1.25rem; /* 圓角大一點，感覺溫潤 */
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.02);
+            overflow: hidden;
+        }
+
+        /* 羊奶膠囊 (Pill) 樣式 */
+        .milk-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-weight: bold;
+            font-size: 1rem;
+            margin-right: 6px;
+        }
+        .milk-pill.small { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+        .milk-pill.large { background-color: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+
+        /* 模態框動畫 */
+        .modal-enter-active, .modal-leave-active { transition: opacity 0.3s ease; }
+        .modal-enter-from, .modal-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+<div id="app" class="flex flex-col h-screen max-w-lg mx-auto bg-[#f8f9fa]">
+
+    <header class="p-4 space-y-4 safe-top bg-white shadow-sm z-10">
+        <div class="flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-gray-800 tracking-tight">
+                <i class="fa-solid fa-users-viewfinder text-indigo-600 mr-2"></i>阿順和 秦佳圓
+            </h1>
+            <div class="flex items-center gap-2">
+                 <span v-if="!dbReady" class="text-xs bg-gray-200 px-2 py-1 rounded-full text-gray-500">連線中...</span>
+                 <span v-else class="text-xs bg-green-100 px-2 py-1 rounded-full text-green-700 font-bold"><i class="fa-solid fa-cloud"></i> 已連線</span>
+            </div>
+        </div>
+
+        <div class="bento-card bg-gradient-to-br from-indigo-600 to-blue-500 text-white p-5">
+            <div class="flex justify-between items-start mb-2">
+                <span class="text-indigo-100 text-lg">目前餘額</span>
+                <span class="bg-white/20 px-2 py-1 rounded text-sm backdrop-blur-sm">
+                    {{ dateRangeStr }}
+                </span>
+            </div>
+            <div class="text-5xl font-bold font-num mb-4 tracking-wider text-center">
+                ${{ formatNumber(currentBalance) }}
+            </div>
+            <div class="grid grid-cols-2 gap-4 border-t border-white/20 pt-3">
+                <div class="text-center">
+                    <div class="text-indigo-200 text-sm mb-1">總消費</div>
+                    <div class="font-bold text-xl font-num">${{ formatNumber(totalExpense) }}</div>
+                </div>
+                <div class="text-center border-l border-white/20">
+                    <div class="text-indigo-200 text-sm mb-1">總儲值</div>
+                    <div class="font-bold text-xl font-num">${{ formatNumber(totalDeposit) }}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div v-if="transactions.length === 0 && dbReady" class="text-center py-4">
+            <p class="text-gray-500 mb-3">目前還沒有資料喔！</p>
+            <button @click="importInitialData" class="bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg font-bold text-lg active:scale-95 transition-transform w-full">
+                <i class="fa-solid fa-file-import mr-2"></i> 一鍵導入歷史帳本
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div v-if="loading" class="text-center py-10 text-gray-400">
+            <i class="fa-solid fa-circle-notch fa-spin text-3xl"></i>
+            <p class="mt-2">讀取雲端資料中...</p>
+        </div>
+
+        <div v-for="(group, monthKey) in groupedTransactions" :key="monthKey">
+            <div class="sticky top-0 bg-[#f8f9fa]/95 backdrop-blur py-2 z-1 mb-2">
+                <h3 class="text-lg font-bold text-gray-500 pl-2 border-l-4 border-indigo-400">
+                    {{ monthKey }}
+                </h3>
+            </div>
+
+            <div v-for="t in group" :key="t.id" class="bento-card mb-3 p-4 flex justify-between items-center relative active:bg-gray-50 transition-colors">
+                <button @click="deleteTransaction(t.id)" class="absolute top-2 right-2 text-gray-300 p-2 hover:text-red-500">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+
+                <div class="flex-1">
+                    <div class="flex items-baseline gap-2 mb-2">
+                        <span class="text-xl font-bold text-gray-800">
+                            {{ formatDateWithWeek(t.date) }}
+                        </span>
+                        <span v-if="t.type === 'deposit'" class="bg-green-100 text-green-800 text-sm px-2 py-0.5 rounded font-bold">儲值</span>
+                        <span v-if="t.note" class="text-gray-500 text-sm">({{ t.note }})</span>
+                    </div>
+
+                    <div v-if="t.type === 'expense'" class="flex flex-wrap gap-2">
+                        <span v-if="t.small > 0" class="milk-pill small">
+                            小 {{ t.small }}
+                        </span>
+                        <span v-if="t.large > 0" class="milk-pill large">
+                            大 {{ t.large }}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="text-right pl-4">
+                    <div class="text-2xl font-bold font-num" :class="t.type === 'deposit' ? 'text-green-600' : 'text-orange-600'">
+                        {{ t.type === 'deposit' ? '+' : '-' }}{{ t.amount }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 pb-6 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] max-w-lg mx-auto">
+        <div class="flex gap-4">
+            <button @click="openModal('expense')" class="flex-1 bg-orange-500 active:bg-orange-600 text-white py-4 rounded-2xl font-bold text-xl shadow-lg flex justify-center items-center gap-2 transition-transform active:scale-95">
+                <i class="fa-solid fa-truck-fast"></i> 配送
+            </button>
+            <button @click="openModal('deposit')" class="flex-1 bg-green-600 active:bg-green-700 text-white py-4 rounded-2xl font-bold text-xl shadow-lg flex justify-center items-center gap-2 transition-transform active:scale-95">
+                <i class="fa-solid fa-hand-holding-dollar"></i> 儲值
+            </button>
+        </div>
+    </div>
+
+    <div v-if="showModal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm">
+        <div class="bg-[#f8f9fa] w-full max-w-lg h-[90vh] sm:h-auto sm:rounded-3xl rounded-t-3xl p-6 flex flex-col shadow-2xl transition-all transform duration-300">
+            
+            <div class="flex justify-between items-center mb-6 border-b pb-4">
+                <h2 class="text-2xl font-bold flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full flex items-center justify-center text-white" :class="modalType === 'expense' ? 'bg-orange-500' : 'bg-green-600'">
+                        <i :class="modalType === 'expense' ? 'fa-solid fa-truck' : 'fa-solid fa-wallet'"></i>
+                    </div>
+                    {{ modalType === 'expense' ? '記一筆配送' : '記一筆儲值' }}
+                </h2>
+                <button @click="showModal = false" class="text-gray-400 hover:text-gray-600 p-2">
+                    <i class="fa-solid fa-xmark text-2xl"></i>
+                </button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto space-y-6">
+                <div class="bg-white p-4 rounded-xl shadow-sm">
+                    <label class="block text-gray-500 font-bold mb-2 text-lg">日期</label>
+                    <div class="flex items-center gap-3">
+                        <input type="date" v-model="form.date" class="w-full p-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-2xl font-num font-bold text-gray-800 focus:border-indigo-500 outline-none">
+                        <span class="text-xl font-bold text-indigo-600 whitespace-nowrap">
+                            {{ getWeekDay(form.date) }}
+                        </span>
+                    </div>
+                </div>
+
+                <div v-if="modalType === 'expense'" class="space-y-4">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border-l-8 border-blue-400">
+                        <label class="flex justify-between items-center mb-3">
+                            <span class="text-xl font-bold text-blue-900">小羊奶 ($70)</span>
+                            <span class="text-3xl font-bold font-num text-blue-600">{{ form.small }}</span>
+                        </label>
+                        <div class="flex gap-3">
+                            <button @click="form.small = Math.max(0, form.small-1)" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-3xl py-3 rounded-xl">-</button>
+                            <button @click="form.small++" class="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold text-3xl py-3 rounded-xl">+</button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-4 rounded-xl shadow-sm border-l-8 border-orange-400">
+                        <label class="flex justify-between items-center mb-3">
+                            <span class="text-xl font-bold text-orange-900">大羊奶 ($130)</span>
+                            <span class="text-3xl font-bold font-num text-orange-600">{{ form.large }}</span>
+                        </label>
+                        <div class="flex gap-3">
+                            <button @click="form.large = Math.max(0, form.large-1)" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-3xl py-3 rounded-xl">-</button>
+                            <button @click="form.large++" class="flex-1 bg-orange-100 hover:bg-orange-200 text-orange-700 font-bold text-3xl py-3 rounded-xl">+</button>
+                        </div>
+                    </div>
+                    
+                    <div class="text-right p-2">
+                        <span class="text-gray-500 text-lg">小計：</span>
+                        <span class="text-3xl font-bold text-orange-600 font-num">${{ calculateExpense() }}</span>
+                    </div>
+                </div>
+
+                <div v-if="modalType === 'deposit'" class="bg-white p-4 rounded-xl shadow-sm border-l-8 border-green-500">
+                    <label class="block text-gray-500 font-bold mb-2 text-lg">儲值/轉帳金額</label>
+                    <input type="number" inputmode="numeric" v-model.number="form.amount" class="w-full p-4 border-2 border-gray-200 rounded-xl text-4xl font-bold text-green-600 font-num focus:border-green-500 outline-none placeholder-gray-200" placeholder="0">
+                    
+                    <div class="grid grid-cols-3 gap-3 mt-4">
+                        <button @click="form.amount = 1000" class="py-2 bg-green-50 text-green-700 rounded-lg font-bold text-lg">+1000</button>
+                        <button @click="form.amount = 2000" class="py-2 bg-green-50 text-green-700 rounded-lg font-bold text-lg">+2000</button>
+                        <button @click="form.amount = 4000" class="py-2 bg-green-50 text-green-700 rounded-lg font-bold text-lg">+4000</button>
+                    </div>
+                </div>
+                
+                <div class="bg-white p-4 rounded-xl shadow-sm">
+                     <label class="block text-gray-500 font-bold mb-2 text-lg">備註 (選填)</label>
+                     <input type="text" v-model="form.note" class="w-full p-3 border-2 border-gray-200 rounded-xl text-xl" placeholder="例如：補上次差額">
+                </div>
+            </div>
+
+            <div class="mt-6 pt-4 border-t border-gray-200">
+                <button @click="submitTransaction" class="w-full py-4 text-white font-bold text-2xl rounded-2xl shadow-lg transition-transform active:scale-95" :class="modalType === 'expense' ? 'bg-orange-500' : 'bg-green-600'">
+                    確認儲存
+                </button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    import { createApp, ref, computed, onMounted } from "https://unpkg.com/vue@3/dist/vue.esm-browser.js";
+
+    // 您的 Firebase 設定
+    const firebaseConfig = {
+        apiKey: "AIzaSyB6D9vh6J2mdnjz2VXEVe99oi7oLF-irFo",
+        authDomain: "crm-ts-1225-001.firebaseapp.com",
+        databaseURL: "https://crm-ts-1225-001-default-rtdb.firebaseio.com",
+        projectId: "crm-ts-1225-001",
+        storageBucket: "crm-ts-1225-001.firebasestorage.app",
+        messagingSenderId: "925760221722",
+        appId: "1:925760221722:web:1aeda0b82f1f16b8dcd7a3"
+    };
+
+    // 初始化 Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const COLLECTION_NAME = "milk_ledger"; // 資料庫集合名稱
+
+    createApp({
+        setup() {
+            const loading = ref(true);
+            const dbReady = ref(false);
+            const transactions = ref([]);
+            
+            // UI 控制
+            const showModal = ref(false);
+            const modalType = ref('expense');
+            const prices = ref({ small: 70, large: 130 }); 
+
+            const form = ref({
+                date: new Date().toISOString().split('T')[0],
+                small: 0,
+                large: 0,
+                amount: '',
+                note: ''
+            });
+
+            // 預設清洗好的歷史資料 (用於一鍵導入)
+            const initialData = [
+                {date: '2025-03-12', type: 'expense', small: 4, large: 0, amount: 260, note: '初始導入'},
+                {date: '2025-03-16', type: 'expense', small: 17, large: 0, amount: 1105, note: '3/21已付'},
+                {date: '2025-03-23', type: 'expense', small: 6, large: 0, amount: 390, note: ''},
+                {date: '2025-03-30', type: 'expense', small: 4, large: 1, amount: 395, note: '小65*4+大135'},
+                {date: '2025-04-12', type: 'expense', small: 10, large: 0, amount: 650, note: ''},
+                {date: '2025-04-21', type: 'expense', small: 5, large: 0, amount: 325, note: ''},
+                {date: '2025-04-30', type: 'deposit', small: 0, large: 0, amount: 3000, note: '轉帳'},
+                {date: '2025-05-01', type: 'expense', small: 4, large: 0, amount: 260, note: ''},
+                {date: '2025-05-04', type: 'expense', small: 8, large: 0, amount: 520, note: ''},
+                {date: '2025-05-12', type: 'expense', small: 10, large: 0, amount: 650, note: ''},
+                {date: '2025-05-24', type: 'expense', small: 10, large: 0, amount: 650, note: ''},
+                {date: '2025-06-01', type: 'expense', small: 11, large: 0, amount: 715, note: ''},
+                {date: '2025-06-08', type: 'expense', small: 7, large: 0, amount: 455, note: ''},
+                {date: '2025-06-08', type: 'deposit', small: 0, large: 0, amount: 4000, note: '儲值'},
+                {date: '2025-06-15', type: 'expense', small: 7, large: 0, amount: 455, note: ''},
+                {date: '2025-06-24', type: 'expense', small: 1, large: 0, amount: 65, note: ''},
+                {date: '2025-06-28', type: 'expense', small: 5, large: 0, amount: 325, note: ''},
+                {date: '2025-07-06', type: 'expense', small: 4, large: 0, amount: 260, note: ''},
+                {date: '2025-07-20', type: 'expense', small: 4, large: 0, amount: 260, note: ''},
+                {date: '2025-07-29', type: 'expense', small: 4, large: 0, amount: 260, note: ''},
+                {date: '2025-08-01', type: 'expense', small: 2, large: 0, amount: 130, note: ''},
+                {date: '2025-08-01', type: 'deposit', small: 0, large: 0, amount: 1290, note: '補之前餘額'},
+                {date: '2025-08-12', type: 'expense', small: 10, large: 0, amount: 650, note: ''},
+                {date: '2025-08-17', type: 'expense', small: 4, large: 0, amount: 280, note: '單價70'},
+                {date: '2025-08-21', type: 'expense', small: 2, large: 0, amount: 140, note: ''},
+                {date: '2025-08-28', type: 'expense', small: 3, large: 0, amount: 210, note: ''},
+                {date: '2025-08-28', type: 'deposit', small: 0, large: 0, amount: 1280, note: ''},
+                {date: '2025-09-01', type: 'expense', small: 2, large: 0, amount: 140, note: ''},
+                {date: '2025-09-06', type: 'expense', small: 5, large: 0, amount: 350, note: ''},
+                {date: '2025-09-16', type: 'expense', small: 4, large: 0, amount: 280, note: ''},
+                {date: '2025-09-22', type: 'expense', small: 2, large: 0, amount: 140, note: ''},
+                {date: '2025-09-30', type: 'expense', small: 6, large: 2, amount: 680, note: '大130'},
+                {date: '2025-09-30', type: 'deposit', small: 0, large: 0, amount: 5000, note: '轉帳'},
+                {date: '2025-10-03', type: 'expense', small: 4, large: 0, amount: 280, note: ''},
+                {date: '2025-10-12', type: 'expense', small: 6, large: 3, amount: 810, note: ''},
+                {date: '2025-10-19', type: 'expense', small: 7, large: 3, amount: 880, note: '修正小計'},
+                {date: '2025-10-19', type: 'deposit', small: 0, large: 0, amount: 3959, note: ''},
+                {date: '2025-10-27', type: 'expense', small: 6, large: 4, amount: 940, note: ''},
+                {date: '2025-11-03', type: 'expense', small: 10, large: 5, amount: 1350, note: ''},
+                {date: '2025-11-03', type: 'deposit', small: 0, large: 0, amount: 1200, note: ''},
+                {date: '2025-11-10', type: 'expense', small: 0, large: 4, amount: 520, note: ''},
+                {date: '2025-11-17', type: 'expense', small: 11, large: 3, amount: 1160, note: ''},
+                {date: '2025-11-17', type: 'deposit', small: 0, large: 0, amount: 4000, note: ''},
+                {date: '2025-11-24', type: 'expense', small: 4, large: 6, amount: 1060, note: ''},
+                {date: '2025-12-01', type: 'expense', small: 4, large: 4, amount: 800, note: ''},
+                {date: '2025-12-06', type: 'expense', small: 13, large: 3, amount: 1300, note: ''},
+                {date: '2025-12-09', type: 'expense', small: 2, large: 0, amount: 140, note: ''},
+                {date: '2025-12-28', type: 'expense', small: 11, large: 4, amount: 1290, note: ''},
+                {date: '2026-01-03', type: 'expense', small: 12, large: 0, amount: 840, note: ''},
+                {date: '2026-01-03', type: 'deposit', small: 0, large: 0, amount: 4200, note: ''},
+                {date: '2026-01-04', type: 'expense', small: 6, large: 0, amount: 420, note: ''},
+            ];
+
+            // 監聽 Firebase 資料
+            onMounted(() => {
+                const q = query(collection(db, COLLECTION_NAME), orderBy("date", "desc"));
+                onSnapshot(q, (snapshot) => {
+                    transactions.value = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    loading.value = false;
+                    dbReady.value = true;
+                }, (error) => {
+                    console.error("Firebase 連線失敗:", error);
+                    loading.value = false;
+                    alert("連線失敗，請檢查網路或權限設定");
+                });
+            });
+
+            // 取得星期幾
+            const getWeekDay = (dateStr) => {
+                const days = ['日', '一', '二', '三', '四', '五', '六'];
+                return `( ${days[new Date(dateStr).getDay()]} )`;
+            };
+
+            const formatNumber = (num) => num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+            
+            // 格式化日期：2/5 (三)
+            const formatDateWithWeek = (dateStr) => {
+                const d = new Date(dateStr);
+                const m = d.getMonth() + 1;
+                const date = d.getDate();
+                return `${m}/${date} ${getWeekDay(dateStr)}`;
+            };
+
+            // 計算統計
+            const currentBalance = computed(() => {
+                return totalDeposit.value - totalExpense.value;
+            });
+            const totalExpense = computed(() => transactions.value.filter(t => t.type === 'expense').reduce((sum, t) => sum + Number(t.amount), 0));
+            const totalDeposit = computed(() => transactions.value.filter(t => t.type === 'deposit').reduce((sum, t) => sum + Number(t.amount), 0));
+
+            // 日期區間計算
+            const dateRangeStr = computed(() => {
+                if (transactions.value.length === 0) return '尚無資料';
+                const dates = transactions.value.map(t => new Date(t.date));
+                const min = new Date(Math.min(...dates));
+                const max = new Date(Math.max(...dates));
+                
+                // 格式化為 YYYY/MM/DD
+                const format = (d) => `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+                return `${format(min)} ~ ${format(max)}`;
+            });
+
+            // 分組顯示
+            const groupedTransactions = computed(() => {
+                const groups = {};
+                transactions.value.forEach(t => {
+                    const d = new Date(t.date);
+                    const key = `${d.getFullYear()}年 ${d.getMonth() + 1}月`;
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(t);
+                });
+                return groups;
+            });
+
+            const openModal = (type) => {
+                modalType.value = type;
+                form.value = {
+                    date: new Date().toISOString().split('T')[0],
+                    small: 0,
+                    large: 0,
+                    amount: '',
+                    note: ''
+                };
+                showModal.value = true;
+            };
+
+            const calculateExpense = () => {
+                return (form.value.small * prices.value.small) + (form.value.large * prices.value.large);
+            };
+
+            const submitTransaction = async () => {
+                if (modalType.value === 'deposit' && !form.value.amount) return alert("請輸入金額");
+                if (modalType.value === 'expense' && calculateExpense() === 0) return alert("請輸入數量");
+
+                const newTx = {
+                    date: form.value.date,
+                    type: modalType.value,
+                    small: modalType.value === 'expense' ? form.value.small : 0,
+                    large: modalType.value === 'expense' ? form.value.large : 0,
+                    amount: modalType.value === 'expense' ? calculateExpense() : form.value.amount,
+                    note: form.value.note,
+                    timestamp: new Date() // 排序用細節
+                };
+
+                try {
+                    await addDoc(collection(db, COLLECTION_NAME), newTx);
+                    showModal.value = false;
+                } catch (e) {
+                    alert("儲存失敗: " + e.message);
+                }
+            };
+
+            const deleteTransaction = async (id) => {
+                if(confirm('確定要刪除這筆紀錄嗎？')) {
+                    try {
+                        await deleteDoc(doc(db, COLLECTION_NAME, id));
+                    } catch (e) {
+                        alert("刪除失敗");
+                    }
+                }
+            };
+
+            // 一鍵導入功能
+            const importInitialData = async () => {
+                if(!confirm(`即將導入 ${initialData.length} 筆歷史資料，確定嗎？`)) return;
+                
+                const batchSize = 500; // Firestore batch limit
+                // 這裡簡單使用迴圈逐筆寫入，因為筆數不多 (50筆左右)
+                // 若筆數多建議使用 writeBatch
+                loading.value = true;
+                try {
+                    const promises = initialData.map(data => {
+                        return addDoc(collection(db, COLLECTION_NAME), {
+                            ...data,
+                            timestamp: new Date(data.date) // 補上排序用 timestamp
+                        });
+                    });
+                    await Promise.all(promises);
+                    alert("匯入成功！");
+                } catch (e) {
+                    alert("匯入發生錯誤: " + e.message);
+                } finally {
+                    loading.value = false;
+                }
+            };
+
+            return {
+                dbReady, loading, showModal, modalType, form, 
+                transactions, groupedTransactions,
+                currentBalance, totalExpense, totalDeposit, dateRangeStr,
+                formatNumber, formatDateWithWeek, getWeekDay,
+                openModal, calculateExpense, submitTransaction, deleteTransaction, importInitialData
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
